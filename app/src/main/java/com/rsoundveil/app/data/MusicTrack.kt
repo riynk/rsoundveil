@@ -12,7 +12,8 @@ data class MusicTrack(
     val downloadUrl: String? = null,
     val downloadAllowed: Boolean = false,
     val licenseLabel: String? = null,
-    val localUri: String? = null
+    val localUri: String? = null,
+    val isVideo: Boolean = false
 )
 
 data class LyricWord(
