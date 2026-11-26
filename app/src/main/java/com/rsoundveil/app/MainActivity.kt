@@ -123,6 +123,27 @@ private fun RSoundveilApp() {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 val mediaId = mediaItem?.mediaId.orEmpty()
                 val selected = activeQueue.firstOrNull { it.provider + ":" + it.id == mediaId }
+                    ?: mediaItem?.takeIf {
+                        it.mediaId.startsWith("local:") || it.mediaId.startsWith("online:")
+                    }?.let { item ->
+                        val metadata = item.mediaMetadata
+                        val uri = item.localConfiguration?.uri?.toString()
+                        val isOnline = item.mediaId.startsWith("online:")
+                        val sourceId = if (isOnline) item.mediaId.removePrefix("online:")
+                            else item.mediaId.removePrefix("local:")
+                        val provider = if (isOnline) sourceId.substringBefore(":") else "Local"
+                        val trackId = if (isOnline) sourceId.substringAfter(":") else sourceId
+                        if (uri.isNullOrBlank()) null else MusicTrack(
+                            id = trackId,
+                            title = metadata.title?.toString().orEmpty(),
+                            artist = metadata.artist?.toString().orEmpty(),
+                            album = metadata.albumTitle?.toString().orEmpty(),
+                            artworkUrl = metadata.artworkUri?.toString(),
+                            provider = provider,
+                            streamUrl = if (isOnline) uri else null,
+                            localUri = if (isOnline) null else uri
+                        )
+                    }
                 if (selected != null) {
                     currentTrack = selected
                     lyrics = null
