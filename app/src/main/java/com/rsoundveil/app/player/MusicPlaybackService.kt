@@ -101,6 +101,7 @@ class MusicPlaybackService : MediaLibraryService() {
         }
         private val onlineRepository = OnlineMusicRepository(this@MusicPlaybackService)
         private val onlineTracks = ConcurrentHashMap<String, MusicTrack>()
+        private val searchResults = ConcurrentHashMap<String, List<MediaItem>>()
 
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
@@ -164,8 +165,13 @@ class MusicPlaybackService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             query: String,
             params: LibraryParams?
-        ): ListenableFuture<LibraryResult<Void>> =
-            Futures.immediateFuture(LibraryResult.ofVoid(params))
+        ): ListenableFuture<LibraryResult<Void>> = submit {
+            val items = loadSearchResults(query)
+            searchResults[query.trim().lowercase()] = items
+            if (searchResults.size > MAX_CACHED_SEARCHES) searchResults.clear()
+            session.notifySearchResultChanged(browser, query, items.size, params)
+            LibraryResult.ofVoid(params)
+        }
 
         override fun onGetSearchResult(
             session: MediaLibrarySession,
@@ -176,26 +182,10 @@ class MusicPlaybackService : MediaLibraryService() {
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = submit {
             val normalizedQuery = query.trim()
-            val local = if (normalizedQuery.isBlank()) {
-                emptyList()
-            } else {
-                queryLocalTracks(search = normalizedQuery)
-            }
-
-            val preferences = getSharedPreferences("rsoundveil.settings", MODE_PRIVATE)
-            val audiusKey = preferences.getString("audius_api_key", "").orEmpty()
-            val remote = if (normalizedQuery.isBlank()) {
-                emptyList()
-            } else {
-                runCatching {
-                    runBlocking { onlineRepository.search(normalizedQuery, audiusKey) }
-                }.getOrDefault(emptyList())
-                    .filterNot { it.isVideo }
-                    .take(MAX_REMOTE_RESULTS)
-            }
-            remote.forEach { onlineTracks[onlineMediaId(it)] = it }
-
-            val items = local + remote.map(::onlineMediaItem)
+            val items = searchResults[normalizedQuery.lowercase()]
+                ?: loadSearchResults(normalizedQuery).also {
+                    searchResults[normalizedQuery.lowercase()] = it
+                }
             val size = pageSize.coerceIn(1, MAX_PAGE_SIZE)
             val start = (page.toLong().coerceAtLeast(0L) * size)
                 .coerceAtMost(items.size.toLong()).toInt()
@@ -223,6 +213,26 @@ class MusicPlaybackService : MediaLibraryService() {
         fun shutdown() {
             executor.shutdownNow()
             onlineTracks.clear()
+            searchResults.clear()
+        }
+
+        private fun loadSearchResults(query: String): List<MediaItem> {
+            val normalized = query.trim()
+            if (normalized.isBlank()) return emptyList()
+
+            val local = queryLocalTracks(search = normalized)
+            val preferences = getSharedPreferences("rsoundveil.settings", MODE_PRIVATE)
+            val audiusKey = preferences.getString("audius_api_key", "").orEmpty()
+            val remote = runCatching {
+                runBlocking { onlineRepository.search(normalized, audiusKey) }
+            }.getOrDefault(emptyList())
+                .filterNot { it.isVideo }
+                .take(MAX_REMOTE_RESULTS)
+
+            if (onlineTracks.size > MAX_CACHED_REMOTE_TRACKS) onlineTracks.clear()
+            remote.forEach { onlineTracks[onlineMediaId(it)] = it }
+            return (local + remote.map(::onlineMediaItem))
+                .distinctBy { it.mediaId }
         }
 
         private fun <T> submit(task: () -> T): ListenableFuture<T> {
@@ -372,5 +382,7 @@ class MusicPlaybackService : MediaLibraryService() {
         private const val MAX_PAGE_SIZE = 100
         private const val MAX_LOCAL_RESULTS = 2_000
         private const val MAX_REMOTE_RESULTS = 60
+        private const val MAX_CACHED_SEARCHES = 20
+        private const val MAX_CACHED_REMOTE_TRACKS = 500
     }
 }
