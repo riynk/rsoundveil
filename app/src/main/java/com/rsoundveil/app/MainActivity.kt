@@ -496,9 +496,6 @@ private fun ExploreScreen(
     }
 }
 
-private fun linesHaveWordSync(document: LyricsDocument): Boolean =
-    document.lines.any { it.words.isNotEmpty() }
-
 @Composable
 private fun LyricsScreen(
     track: MusicTrack?,
@@ -539,8 +536,8 @@ private fun LyricsScreen(
             }
         }
         lyrics?.let { document ->
-            Text("Source: " + document.source + if (linesHaveWordSync(document)) " · word-by-word sync" else " · line-sync", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
-            val lines = document.lines
+            val lines = remember(document) { document.lines }
+            Text("Source: " + document.source + if (lines.any { it.words.isNotEmpty() }) " · word-by-word sync" else " · line-sync", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
             if (lines.isNotEmpty()) {
                 val active = lines.indexOfLast { it.startMs <= position }
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
