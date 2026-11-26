@@ -1,20 +1,60 @@
 package com.rsoundveil.app.data
 
+import android.content.Context
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.URLEncoder
 
-class LyricsRepository {
+class LyricsRepository(context: Context) {
+    private val cache = context.getSharedPreferences("rsoundveil.lyrics.cache", Context.MODE_PRIVATE)
+
+    fun cached(track: MusicTrack): LyricsDocument? {
+        val raw = cache.getString(cacheKey(track), null) ?: return null
+        return runCatching {
+            val json = JSONObject(raw)
+            LyricsDocument(
+                trackId = track.id,
+                plainLyrics = json.optString("plain").takeIf { it.isNotBlank() && it != "null" },
+                syncedLyrics = json.optString("synced").takeIf { it.isNotBlank() && it != "null" },
+                source = json.optString("source", "Offline cache"),
+                wordSynced = json.optBoolean("wordSynced", false)
+            )
+        }.getOrNull()
+    }
+
+    fun cachedTranslation(track: MusicTrack, sourceLanguage: String): String? =
+        cache.getString(translationKey(track, sourceLanguage), null)
+
+    fun saveTranslation(track: MusicTrack, sourceLanguage: String, translation: String) {
+        cache.edit().putString(translationKey(track, sourceLanguage), translation).apply()
+    }
+
+    private fun cacheDocument(track: MusicTrack, document: LyricsDocument) {
+        val json = JSONObject()
+            .put("plain", document.plainLyrics)
+            .put("synced", document.syncedLyrics)
+            .put("source", document.source)
+            .put("wordSynced", document.wordSynced)
+        cache.edit().putString(cacheKey(track), json.toString()).apply()
+    }
+
+    private fun cacheKey(track: MusicTrack) = "lyrics:" + track.provider + ":" + track.id
+    private fun translationKey(track: MusicTrack, sourceLanguage: String) =
+        "translation:" + track.provider + ":" + track.id + ":" + sourceLanguage.trim().lowercase()
+
     suspend fun find(track: MusicTrack): LyricsDocument {
         val fromLrclib = runCatching { findLrclib(track) }.getOrNull()
-        if (fromLrclib != null && (!fromLrclib.plainLyrics.isNullOrBlank() || !fromLrclib.syncedLyrics.isNullOrBlank())) {
-            return fromLrclib
+        val document = if (fromLrclib != null &&
+            (!fromLrclib.plainLyrics.isNullOrBlank() || !fromLrclib.syncedLyrics.isNullOrBlank())
+        ) {
+            fromLrclib
+        } else {
+            val fromLyricsOvh = runCatching { findLyricsOvh(track) }.getOrNull()
+            fromLyricsOvh?.takeIf { !it.plainLyrics.isNullOrBlank() }
+                ?: throw IllegalStateException("No lyrics found from LRCLIB or lyrics.ovh")
         }
-
-        val fromLyricsOvh = runCatching { findLyricsOvh(track) }.getOrNull()
-        if (fromLyricsOvh != null && !fromLyricsOvh.plainLyrics.isNullOrBlank()) return fromLyricsOvh
-
-        throw IllegalStateException("No lyrics found from LRCLIB or lyrics.ovh")
+        cacheDocument(track, document)
+        return document
     }
 
     private suspend fun findLrclib(track: MusicTrack): LyricsDocument {
