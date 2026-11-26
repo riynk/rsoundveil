@@ -17,7 +17,8 @@ class LyricsRepository(context: Context) {
                 plainLyrics = json.optString("plain").takeIf { it.isNotBlank() && it != "null" },
                 syncedLyrics = json.optString("synced").takeIf { it.isNotBlank() && it != "null" },
                 source = json.optString("source", "Offline cache"),
-                wordSynced = json.optBoolean("wordSynced", false)
+                wordSynced = json.optBoolean("wordSynced", false),
+                lyricsFile = json.optString("lyricsFile").takeIf { it.isNotBlank() && it != "null" }
             )
         }.getOrNull()
     }
@@ -35,6 +36,7 @@ class LyricsRepository(context: Context) {
             .put("synced", document.syncedLyrics)
             .put("source", document.source)
             .put("wordSynced", document.wordSynced)
+            .put("lyricsFile", document.lyricsFile)
         cache.edit().putString(cacheKey(track), json.toString()).apply()
     }
 
@@ -70,7 +72,8 @@ class LyricsRepository(context: Context) {
             plainLyrics = result.optString("plainLyrics").takeIf { it.isNotBlank() && it != "null" },
             syncedLyrics = result.optString("syncedLyrics").takeIf { it.isNotBlank() && it != "null" },
             source = "LRCLIB",
-            wordSynced = result.optBoolean("hasWordSync", false)
+            wordSynced = result.optBoolean("hasWordSync", false),
+            lyricsFile = result.optString("lyricsfile").takeIf { it.isNotBlank() && it != "null" }
         )
     }
 
