@@ -138,11 +138,11 @@ private fun RSoundveilApp() {
 
     val onDownloadTrack: (MusicTrack) -> Unit = { track ->
         scope.launch {
-            val prepared = runCatching { music.resolvePlayback(track) }.getOrElse {
-                message = "Download preparation failed: " + it.message
-                null
-            }
-            if (prepared != null) {
+            val preparation = runCatching { music.resolvePlayback(track) }
+            val prepared = preparation.getOrNull()
+            if (prepared == null) {
+                message = "Download preparation failed: " + preparation.exceptionOrNull()?.message
+            } else {
                 val downloadUrl = prepared.downloadUrl
                     ?: if (prepared.provider == "Archive.org") prepared.streamUrl else null
                 if (!prepared.downloadAllowed || downloadUrl.isNullOrBlank()) {
