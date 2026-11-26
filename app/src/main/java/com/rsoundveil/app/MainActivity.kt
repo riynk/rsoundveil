@@ -205,7 +205,7 @@ private fun RSoundveilApp() {
                             val granted = ContextCompat.checkSelfPermission(context, audioPermission) == PackageManager.PERMISSION_GRANTED
                             if (granted) localTracks = scanAudio(context) else permissionLauncher.launch(audioPermission)
                         },
-                        onLyrics = { destination = Destination.LYRICS }
+                        onPlayer = { destination = Destination.PLAYER }
                     )
                     Destination.PLAYER -> currentTrack?.let { track ->
                         NowPlayingScreen(
