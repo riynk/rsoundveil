@@ -76,6 +76,7 @@ private fun RSoundveilApp() {
     var currentTrack by remember { mutableStateOf<MusicTrack?>(null) }
     var lyrics by remember { mutableStateOf<LyricsDocument?>(null) }
     var translation by remember { mutableStateOf<String?>(null) }
+    var lyricSourceLanguage by remember { mutableStateOf("en") }
     var jamendoId by remember { mutableStateOf(prefs.getString("jamendo_client_id", "").orEmpty()) }
     var audiusKey by remember { mutableStateOf(prefs.getString("audius_api_key", "").orEmpty()) }
     var loading by remember { mutableStateOf(false) }
@@ -225,6 +226,8 @@ private fun RSoundveilApp() {
                         track = currentTrack,
                         lyrics = lyrics,
                         translation = translation,
+                        sourceLanguage = lyricSourceLanguage,
+                        onSourceLanguage = { lyricSourceLanguage = it },
                         position = position,
                         loading = loading,
                         translating = translating,
@@ -243,7 +246,7 @@ private fun RSoundveilApp() {
                             val text = lyrics?.plainLyrics ?: lyrics?.syncedLyrics
                             if (!text.isNullOrBlank()) scope.launch {
                                 translating = true
-                                runCatching { lyricService.translateToIndonesian(text) }
+                                runCatching { lyricService.translateToIndonesian(text, lyricSourceLanguage) }
                                     .onSuccess { translation = it }
                                     .onFailure { message = "Translation failed: " + it.message }
                                 translating = false
@@ -384,6 +387,8 @@ private fun LyricsScreen(
     track: MusicTrack?,
     lyrics: LyricsDocument?,
     translation: String?,
+    sourceLanguage: String,
+    onSourceLanguage: (String) -> Unit,
     position: Long,
     loading: Boolean,
     translating: Boolean,
@@ -398,6 +403,14 @@ private fun LyricsScreen(
             return@Column
         }
         TrackRow(track, onClick = {}, trailing = { Text(track.provider, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary) })
+        OutlinedTextField(
+            value = sourceLanguage,
+            onValueChange = onSourceLanguage,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text("Lyrics language (ISO code)") },
+            supportingText = { Text("Example: en, ja, ko, es. Translation target: Indonesian.") }
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onFind, enabled = !loading) {
                 if (loading) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Sync, null)
