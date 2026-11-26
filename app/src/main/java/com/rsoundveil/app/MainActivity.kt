@@ -49,7 +49,7 @@ import com.rsoundveil.app.player.MusicPlaybackService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class Destination { HOME, EXPLORE, LYRICS, LIBRARY, SETTINGS }
+private enum class Destination { HOME, EXPLORE, PLAYER, LYRICS, LIBRARY, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -157,6 +157,7 @@ private fun RSoundveilApp() {
                             position = position,
                             duration = duration,
                             onPlayPause = { if (playing) controller?.pause() else controller?.play() },
+                            onOpen = { destination = Destination.PLAYER },
                             onLyrics = { destination = Destination.LYRICS }
                         )
                     }
@@ -206,6 +207,32 @@ private fun RSoundveilApp() {
                         },
                         onLyrics = { destination = Destination.LYRICS }
                     )
+                    Destination.PLAYER -> currentTrack?.let { track ->
+                        NowPlayingScreen(
+                            track = track,
+                            playing = playing,
+                            position = position,
+                            duration = duration,
+                            shuffle = controller?.shuffleModeEnabled == true,
+                            repeatMode = controller?.repeatMode ?: Player.REPEAT_MODE_OFF,
+                            onPlayPause = { if (playing) controller?.pause() else controller?.play() },
+                            onPrevious = { controller?.seekToPreviousMediaItem() },
+                            onNext = { controller?.seekToNextMediaItem() },
+                            onSeek = { controller?.seekTo(it) },
+                            onShuffle = { controller?.shuffleModeEnabled = !(controller?.shuffleModeEnabled ?: false) },
+                            onRepeat = {
+                                val next = when (controller?.repeatMode) {
+                                    Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ONE
+                                    Player.REPEAT_MODE_ONE -> Player.REPEAT_MODE_ALL
+                                    else -> Player.REPEAT_MODE_OFF
+                                }
+                                controller?.repeatMode = next
+                            },
+                            onLyrics = { destination = Destination.LYRICS }
+                        )
+                    } ?: HomeScreen(currentTrack, { destination = Destination.EXPLORE }, {
+                        destination = Destination.LIBRARY
+                    }, { destination = Destination.LYRICS })
                     Destination.EXPLORE -> ExploreScreen(
                         query = query,
                         onQuery = { query = it },
@@ -220,7 +247,7 @@ private fun RSoundveilApp() {
                                 loading = false
                             }
                         },
-                        onPlay = { startTrack(it, music, controller, { currentTrack = it }, { message = it }, scope) }
+                        onPlay = { startTrack(it, results, music, controller, { currentTrack = it }, { message = it }, scope) }
                     )
                     Destination.LYRICS -> LyricsScreen(
                         track = currentTrack,
@@ -259,7 +286,7 @@ private fun RSoundveilApp() {
                             val granted = ContextCompat.checkSelfPermission(context, audioPermission) == PackageManager.PERMISSION_GRANTED
                             if (granted) localTracks = scanAudio(context) else permissionLauncher.launch(audioPermission)
                         },
-                        onPlay = { startTrack(it, music, controller, { currentTrack = it }, { message = it }, scope) }
+                        onPlay = { startTrack(it, localTracks, music, controller, { currentTrack = it }, { message = it }, scope) }
                     )
                     Destination.SETTINGS -> SettingsScreen(
                         jamendoId = jamendoId,
@@ -280,6 +307,7 @@ private fun RSoundveilApp() {
 
 private fun startTrack(
     track: MusicTrack,
+    candidates: List<MusicTrack>,
     music: OnlineMusicRepository,
     controller: MediaController?,
     onSelected: (MusicTrack) -> Unit,
@@ -295,17 +323,28 @@ private fun startTrack(
         runCatching { music.resolvePlayback(track) }
             .onSuccess { resolved ->
                 onSelected(resolved)
-                val metadata = MediaMetadata.Builder()
-                    .setTitle(resolved.title)
-                    .setArtist(resolved.artist)
-                    .setAlbumTitle(resolved.album)
-                    .setArtworkUri(resolved.artworkUrl?.let { Uri.parse(it) })
-                    .build()
-                val uri = resolved.streamUrl ?: resolved.localUri
-                if (uri.isNullOrBlank()) {
+                val queue = candidates
+                    .filter { candidate -> candidate.id == track.id || candidate.provider != "Archive.org" }
+                    .map { candidate -> if (candidate.id == track.id) resolved else candidate }
+                    .filter { !it.streamUrl.isNullOrBlank() || !it.localUri.isNullOrBlank() }
+                val selectedIndex = queue.indexOfFirst { it.id == resolved.id }.coerceAtLeast(0)
+                val mediaItems = queue.map { item ->
+                    val metadata = MediaMetadata.Builder()
+                        .setTitle(item.title)
+                        .setArtist(item.artist)
+                        .setAlbumTitle(item.album)
+                        .setArtworkUri(item.artworkUrl?.let { Uri.parse(it) })
+                        .build()
+                    MediaItem.Builder()
+                        .setMediaId(item.provider + ":" + item.id)
+                        .setUri(item.streamUrl ?: item.localUri!!)
+                        .setMediaMetadata(metadata)
+                        .build()
+                }
+                if (mediaItems.isEmpty()) {
                     onError("The provider did not return a playable URL.")
                 } else {
-                    player.setMediaItem(MediaItem.Builder().setUri(uri).setMediaMetadata(metadata).build())
+                    player.setMediaItems(mediaItems, selectedIndex, 0L)
                     player.prepare()
                     player.play()
                 }
@@ -315,7 +354,7 @@ private fun startTrack(
 }
 
 @Composable
-private fun HomeScreen(track: MusicTrack?, onExplore: () -> Unit, onLibrary: () -> Unit, onLyrics: () -> Unit) {
+private fun HomeScreen(track: MusicTrack?, onExplore: () -> Unit, onLibrary: () -> Unit, onPlayer: () -> Unit) {
     LazyColumn(contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
             Surface(shape = RoundedCornerShape(26.dp), color = Color(0xFF28223D), modifier = Modifier.fillMaxWidth()) {
@@ -338,7 +377,7 @@ private fun HomeScreen(track: MusicTrack?, onExplore: () -> Unit, onLibrary: () 
             if (track == null) {
                 Text("Play a track from Explore or Library. Its lyrics will be linked to the active player.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                TrackRow(track, onClick = onLyrics, trailing = { Icon(Icons.Default.MusicNote, null, tint = MaterialTheme.colorScheme.secondary) })
+                TrackRow(track, onClick = onPlayer, trailing = { Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.secondary) })
             }
         }
     }
@@ -503,15 +542,89 @@ private fun SettingsScreen(
 }
 
 @Composable
+private fun NowPlayingScreen(
+    track: MusicTrack,
+    playing: Boolean,
+    position: Long,
+    duration: Long,
+    shuffle: Boolean,
+    repeatMode: Int,
+    onPlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onShuffle: () -> Unit,
+    onRepeat: () -> Unit,
+    onLyrics: () -> Unit
+) {
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceEvenly
+    ) {
+        Text("NOW PLAYING", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
+        AsyncImage(
+            model = track.artworkUrl,
+            contentDescription = "Album artwork",
+            modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(28.dp))
+        )
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(track.album.ifBlank { track.provider }, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
+        }
+        Column(Modifier.fillMaxWidth()) {
+            Slider(
+                value = if (duration > 0L) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f,
+                onValueChange = { if (duration > 0L) onSeek((duration * it).toLong()) },
+                enabled = duration > 0L
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(formatTime(position), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(formatTime(duration), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onShuffle) {
+                Icon(Icons.Default.Shuffle, "Shuffle", tint = if (shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(34.dp)) }
+            FilledIconButton(onClick = onPlayPause, modifier = Modifier.size(68.dp)) {
+                Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/Pause", modifier = Modifier.size(34.dp))
+            }
+            IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(34.dp)) }
+            IconButton(onClick = onRepeat) {
+                Icon(
+                    if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                    "Repeat",
+                    tint = if (repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        OutlinedButton(onClick = onLyrics, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.Lyrics, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Open synchronized lyrics")
+        }
+    }
+}
+
+private fun formatTime(milliseconds: Long): String {
+    val seconds = milliseconds.coerceAtLeast(0L) / 1_000L
+    return "%d:%02d".format(seconds / 60L, seconds % 60L)
+}
+
+@Composable
 private fun MiniPlayer(
     track: MusicTrack,
     playing: Boolean,
     position: Long,
     duration: Long,
     onPlayPause: () -> Unit,
+    onOpen: () -> Unit,
     onLyrics: () -> Unit
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth().clickable(onClick = onLyrics)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(track.artworkUrl, null, modifier = Modifier.size(42.dp).clip(RoundedCornerShape(8.dp)))
