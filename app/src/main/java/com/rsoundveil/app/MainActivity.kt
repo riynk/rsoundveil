@@ -39,12 +39,15 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import com.rsoundveil.app.data.AlbumInfo
 import com.rsoundveil.app.data.ArtistInfo
@@ -81,6 +84,7 @@ private fun RSoundveilApp() {
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var destination by remember { mutableStateOf(Destination.HOME) }
     var query by remember { mutableStateOf("") }
+    var videoMode by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
     var localTracks by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
     var currentTrack by remember { mutableStateOf<MusicTrack?>(null) }
@@ -290,6 +294,7 @@ private fun RSoundveilApp() {
                     Destination.PLAYER -> currentTrack?.let { track ->
                         NowPlayingScreen(
                             track = track,
+                            player = controller,
                             playing = playing,
                             position = position,
                             duration = duration,
@@ -322,13 +327,19 @@ private fun RSoundveilApp() {
                         onQuery = { query = it },
                         tracks = results,
                         loading = loading,
+                        videoMode = videoMode,
+                        onVideoModeChange = { videoMode = it; results = emptyList() },
                         onDownload = onDownloadTrack,
                         onSearch = {
                             if (query.isNotBlank()) scope.launch {
                                 loading = true
                                 message = null
-                                results = music.search(query.trim(), audiusKey)
-                                if (results.isEmpty()) message = "No results. Connect Jamendo or Audius in Settings, or try a different search."
+                                results = if (videoMode) music.searchVideos(query.trim()) else music.search(query.trim(), audiusKey)
+                                if (results.isEmpty()) message = if (videoMode) {
+                                    "No licensed archive videos matched this search."
+                                } else {
+                                    "No results. Connect Jamendo or Audius in Settings, or try a different search."
+                                }
                                 loading = false
                             }
                         },
@@ -511,6 +522,8 @@ private fun ExploreScreen(
     onQuery: (String) -> Unit,
     tracks: List<MusicTrack>,
     loading: Boolean,
+    videoMode: Boolean,
+    onVideoModeChange: (Boolean) -> Unit,
     onDownload: (MusicTrack) -> Unit,
     onSearch: () -> Unit,
     onPlay: (MusicTrack) -> Unit
@@ -521,16 +534,30 @@ private fun ExploreScreen(
             value = query,
             onValueChange = onQuery,
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Search tracks, artists, albums") },
+            placeholder = { Text(if (videoMode) "Search licensed videos" else "Search tracks, artists, albums") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             trailingIcon = { IconButton(onClick = onSearch, enabled = !loading) { Icon(Icons.Default.ArrowForward, "Search") } },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSearch() })
         )
-        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
+            FilterChip(
+                selected = !videoMode,
+                onClick = { onVideoModeChange(false) },
+                label = { Text("Audio") },
+                leadingIcon = { Icon(Icons.Default.MusicNote, null) }
+            )
+            FilterChip(
+                selected = videoMode,
+                onClick = { onVideoModeChange(true) },
+                label = { Text("Video") },
+                leadingIcon = { Icon(Icons.Default.VideoLibrary, null) }
+            )
+        }
+        Spacer(Modifier.height(8.dp))
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        Text("Unified results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 10.dp))
+        Text(if (videoMode) "Licensed video results" else "Unified music results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 10.dp))
         if (tracks.isEmpty() && !loading) {
             Text("Internet Archive works without credentials. Connect Jamendo or Audius in Settings to add their catalogs.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -773,6 +800,7 @@ private fun SettingsScreen(
 @Composable
 private fun NowPlayingScreen(
     track: MusicTrack,
+    player: Player?,
     playing: Boolean,
     position: Long,
     duration: Long,
@@ -793,15 +821,33 @@ private fun NowPlayingScreen(
         verticalArrangement = Arrangement.SpaceEvenly
     ) {
         Text("NOW PLAYING", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
-        AsyncImage(
-            model = track.artworkUrl,
-            contentDescription = "Album artwork",
-            modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(28.dp))
-        )
+        if (track.isVideo) {
+            AndroidView(
+                factory = { viewContext ->
+                    PlayerView(viewContext).apply {
+                        useController = false
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        this.player = player
+                    }
+                },
+                update = { it.player = player },
+                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(20.dp))
+            )
+        } else {
+            AsyncImage(
+                model = track.artworkUrl,
+                contentDescription = "Album artwork",
+                modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(28.dp))
+            )
+        }
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(track.album.ifBlank { track.provider }, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
+            Text(
+                (if (track.isVideo) "VIDEO · " else "AUDIO · ") + track.album.ifBlank { track.provider },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.secondary
+            )
         }
         Column(Modifier.fillMaxWidth()) {
             Slider(
@@ -939,7 +985,7 @@ private fun enqueueAuthorizedDownload(context: Context, track: MusicTrack): Long
         .setAllowedOverMetered(true)
         .setAllowedOverRoaming(false)
         .setDestinationInExternalPublicDir(
-            Environment.DIRECTORY_MUSIC,
+            if (track.isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_MUSIC,
             "rsoundveil/" + safeBase + "." + extension
         )
     val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
