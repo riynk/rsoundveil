@@ -79,6 +79,7 @@ private fun RSoundveilApp() {
     var results by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
     var localTracks by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
     var currentTrack by remember { mutableStateOf<MusicTrack?>(null) }
+    var activeQueue by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
     var lyrics by remember { mutableStateOf<LyricsDocument?>(null) }
     var translation by remember { mutableStateOf<String?>(null) }
     var lyricSourceLanguage by remember { mutableStateOf("en") }
@@ -100,12 +101,23 @@ private fun RSoundveilApp() {
         )
         onDispose { }
     }
-    DisposableEffect(controller) {
+    DisposableEffect(controller, activeQueue) {
         val active = controller ?: return@DisposableEffect onDispose { }
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
             override fun onPlaybackStateChanged(playbackState: Int) {
-                duration = active.duration.takeIf { it > 0L } ?: duration
+                duration = active.duration.takeIf { it > 0L && it != androidx.media3.common.C.TIME_UNSET } ?: duration
+            }
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                val mediaId = mediaItem?.mediaId.orEmpty()
+                val selected = activeQueue.firstOrNull { it.provider + ":" + it.id == mediaId }
+                if (selected != null) {
+                    currentTrack = selected
+                    lyrics = null
+                    translation = null
+                }
+                position = 0L
+                duration = active.duration.takeIf { it > 0L && it != androidx.media3.common.C.TIME_UNSET } ?: 0L
             }
         }
         active.addListener(listener)
@@ -299,7 +311,7 @@ private fun RSoundveilApp() {
                                 loading = false
                             }
                         },
-                        onPlay = { startTrack(it, results, music, controller, { currentTrack = it }, { message = it }, scope) }
+                        onPlay = { startTrack(it, results, music, controller, { currentTrack = it }, { activeQueue = it }, { message = it }, scope) }
                     )
                     Destination.LYRICS -> LyricsScreen(
                         track = currentTrack,
@@ -349,7 +361,7 @@ private fun RSoundveilApp() {
                             val granted = ContextCompat.checkSelfPermission(context, audioPermission) == PackageManager.PERMISSION_GRANTED
                             if (granted) localTracks = scanAudio(context) else permissionLauncher.launch(audioPermission)
                         },
-                        onPlay = { startTrack(it, localTracks, music, controller, { currentTrack = it }, { message = it }, scope) }
+                        onPlay = { startTrack(it, localTracks, music, controller, { currentTrack = it }, { activeQueue = it }, { message = it }, scope) }
                     )
                     Destination.SETTINGS -> SettingsScreen(
                         jamendoId = jamendoId,
@@ -374,6 +386,7 @@ private fun startTrack(
     music: OnlineMusicRepository,
     controller: MediaController?,
     onSelected: (MusicTrack) -> Unit,
+    onQueueReady: (List<MusicTrack>) -> Unit,
     onError: (String) -> Unit,
     scope: kotlinx.coroutines.CoroutineScope
 ) {
@@ -387,10 +400,11 @@ private fun startTrack(
             .onSuccess { resolved ->
                 onSelected(resolved)
                 val queue = candidates
-                    .filter { candidate -> candidate.id == track.id || candidate.provider != "Archive.org" }
+                    .filter { candidate -> candidate.provider == track.provider && candidate.id == track.id || candidate.provider != "Archive.org" }
                     .map { candidate -> if (candidate.id == track.id) resolved else candidate }
                     .filter { !it.streamUrl.isNullOrBlank() || !it.localUri.isNullOrBlank() }
-                val selectedIndex = queue.indexOfFirst { it.id == resolved.id }.coerceAtLeast(0)
+                val selectedIndex = queue.indexOfFirst { it.provider == resolved.provider && it.id == resolved.id }.coerceAtLeast(0)
+                onQueueReady(queue)
                 val mediaItems = queue.map { item ->
                     val metadata = MediaMetadata.Builder()
                         .setTitle(item.title)
