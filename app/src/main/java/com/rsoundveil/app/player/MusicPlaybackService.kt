@@ -223,16 +223,33 @@ class MusicPlaybackService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: List<MediaItem>
         ): ListenableFuture<List<MediaItem>> = submit {
-            mediaItems.map { requested ->
-                val track = onlineTracks[requested.mediaId] ?: return@map requested
-                val resolved = runBlocking { onlineRepository.resolvePlayback(track) }
-                val stream = resolved.streamUrl ?: resolved.localUri
-                    ?: error("The selected provider did not return a playable audio stream.")
-                MediaItem.Builder()
-                    .setMediaId(requested.mediaId)
-                    .setUri(Uri.parse(stream))
-                    .setMediaMetadata(requested.mediaMetadata)
-                    .build()
+            mediaItems.flatMap { requested ->
+                when {
+                    requested.mediaId.startsWith(ALBUM_PREFIX) -> {
+                        val albumId = requested.mediaId.removePrefix(ALBUM_PREFIX).toLongOrNull()
+                            ?: return@flatMap emptyList()
+                        queryLocalTracks(albumId = albumId)
+                    }
+                    requested.mediaId.startsWith(ARTIST_PREFIX) -> {
+                        val artistId = requested.mediaId.removePrefix(ARTIST_PREFIX).toLongOrNull()
+                            ?: return@flatMap emptyList()
+                        queryLocalTracks(artistId = artistId)
+                    }
+                    else -> {
+                        val track = onlineTracks[requested.mediaId]
+                            ?: return@flatMap listOf(requested)
+                        val resolved = runBlocking { onlineRepository.resolvePlayback(track) }
+                        val stream = resolved.streamUrl ?: resolved.localUri
+                            ?: error("The selected provider did not return a playable audio stream.")
+                        listOf(
+                            MediaItem.Builder()
+                                .setMediaId(requested.mediaId)
+                                .setUri(Uri.parse(stream))
+                                .setMediaMetadata(requested.mediaMetadata)
+                                .build()
+                        )
+                    }
+                }
             }
         }
 
@@ -315,10 +332,13 @@ class MusicPlaybackService : MediaLibraryService() {
                 selectionArgs += pattern
             }
 
-            val order = if (recentFirst) {
-                MediaStore.Audio.Media.DATE_ADDED + " DESC"
-            } else {
-                MediaStore.Audio.Media.TITLE + " COLLATE NOCASE ASC"
+            val order = when {
+                recentFirst -> MediaStore.Audio.Media.DATE_ADDED + " DESC"
+                albumId != null -> MediaStore.Audio.Media.TRACK + " ASC, " +
+                    MediaStore.Audio.Media.TITLE + " COLLATE NOCASE ASC"
+                artistId != null -> MediaStore.Audio.Media.ALBUM + " COLLATE NOCASE ASC, " +
+                    MediaStore.Audio.Media.TRACK + " ASC"
+                else -> MediaStore.Audio.Media.TITLE + " COLLATE NOCASE ASC"
             }
             val result = ArrayList<MediaItem>()
 
@@ -390,7 +410,7 @@ class MusicPlaybackService : MediaLibraryService() {
                         .setSubtitle(count.toString() + " tracks" + if (year > 0) " · " + year else "")
                         .setArtworkUri(artwork)
                         .setIsBrowsable(true)
-                        .setIsPlayable(false)
+                        .setIsPlayable(true)
                         .build()
                     items += MediaItem.Builder()
                         .setMediaId(ALBUM_PREFIX + id)
@@ -426,7 +446,7 @@ class MusicPlaybackService : MediaLibraryService() {
                         .setTitle(artist.ifBlank { "Unknown artist" })
                         .setSubtitle(albums.toString() + " albums · " + tracks + " tracks")
                         .setIsBrowsable(true)
-                        .setIsPlayable(false)
+                        .setIsPlayable(true)
                         .build()
                     items += MediaItem.Builder()
                         .setMediaId(ARTIST_PREFIX + id)
