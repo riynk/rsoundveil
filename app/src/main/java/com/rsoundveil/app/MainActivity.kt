@@ -64,7 +64,7 @@ private fun RSoundveilApp() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("rsoundveil.settings", Context.MODE_PRIVATE) }
     val music = remember { OnlineMusicRepository(context) }
-    val lyricService = remember { LyricsRepository() }
+    val lyricService = remember { LyricsRepository(context) }
     val sessionToken = remember { SessionToken(context, ComponentName(context, MusicPlaybackService::class.java)) }
     val controllerFuture = remember { MediaController.Builder(context, sessionToken).buildAsync() }
 
@@ -261,11 +261,19 @@ private fun RSoundveilApp() {
                         onFind = {
                             val track = currentTrack
                             if (track != null) scope.launch {
+                                lyrics = lyricService.cached(track)
+                                translation = lyricService.cachedTranslation(track, lyricSourceLanguage)
                                 loading = true
                                 message = null
                                 runCatching { lyricService.find(track) }
-                                    .onSuccess { lyrics = it; translation = null }
-                                    .onFailure { message = "Lyrics lookup failed: " + it.message }
+                                    .onSuccess {
+                                        lyrics = it
+                                        translation = lyricService.cachedTranslation(track, lyricSourceLanguage)
+                                    }
+                                    .onFailure {
+                                        if (lyrics == null) message = "Lyrics lookup failed: " + it.message
+                                        else message = "Showing saved offline lyrics; online refresh failed."
+                                    }
                                 loading = false
                             }
                         },
@@ -274,7 +282,10 @@ private fun RSoundveilApp() {
                             if (!text.isNullOrBlank()) scope.launch {
                                 translating = true
                                 runCatching { lyricService.translateToIndonesian(text, lyricSourceLanguage) }
-                                    .onSuccess { translation = it }
+                                    .onSuccess {
+                                        translation = it
+                                        currentTrack?.let { active -> lyricService.saveTranslation(active, lyricSourceLanguage, it) }
+                                    }
                                     .onFailure { message = "Translation failed: " + it.message }
                                 translating = false
                             }
