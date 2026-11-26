@@ -787,7 +787,7 @@ private fun SettingsScreen(
         item {
             Text("Audius read-only API key", fontWeight = FontWeight.SemiBold)
             OutlinedTextField(audiusKey, onAudiusKey, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), placeholder = { Text("Optional API key") })
-            Text("Only read endpoints are called. The API secret is not requested. The key is stored locally for catalog and stream requests.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Only read-only catalogue search is used. Audius search also works without a key; an optional key improves rate limits. The API secret is not requested and the key is never sent to media CDN hosts.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item { Button(onClick = onSave, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Save, null); Spacer(Modifier.width(8.dp)); Text("Save settings") } }
         item {
