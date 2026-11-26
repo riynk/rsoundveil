@@ -343,12 +343,14 @@ private fun RSoundveilApp() {
                         },
                         onTranslate = {
                             val text = lyrics?.plainLyrics ?: lyrics?.syncedLyrics
-                            if (!text.isNullOrBlank()) scope.launch {
+                            val selectedTrack = currentTrack
+                            val selectedLanguage = lyricSourceLanguage
+                            if (!text.isNullOrBlank() && selectedTrack != null) scope.launch {
                                 translating = true
-                                runCatching { lyricService.translateToIndonesian(text, lyricSourceLanguage) }
+                                runCatching { lyricService.translateToIndonesian(text, selectedLanguage) }
                                     .onSuccess {
                                         translation = it
-                                        currentTrack?.let { active -> lyricService.saveTranslation(active, lyricSourceLanguage, it) }
+                                        lyricService.saveTranslation(selectedTrack, selectedLanguage, it)
                                     }
                                     .onFailure { message = "Translation failed: " + it.message }
                                 translating = false
