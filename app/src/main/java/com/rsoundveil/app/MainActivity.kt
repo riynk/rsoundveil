@@ -546,7 +546,9 @@ private fun LyricsScreen(
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(lines) { line ->
                         val index = lines.indexOf(line)
-                        val wordText = remember(line, position) {
+                        val activeWordColor = MaterialTheme.colorScheme.primary
+                        val inactiveWordColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        val wordText = remember(line, position, activeWordColor, inactiveWordColor) {
                             buildAnnotatedString {
                                 line.words.forEachIndexed { wordIndex, word ->
                                     val wordEnd = word.endMs
@@ -557,7 +559,7 @@ private fun LyricsScreen(
                                     val activeWord = position >= word.startMs && position < wordEnd
                                     withStyle(
                                         SpanStyle(
-                                            color = if (activeWord) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            color = if (activeWord) activeWordColor else inactiveWordColor,
                                             fontWeight = if (activeWord) FontWeight.Bold else FontWeight.Normal
                                         )
                                     ) {
