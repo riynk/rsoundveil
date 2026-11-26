@@ -11,7 +11,7 @@ class OnlineMusicRepository(context: Context) {
 
     suspend fun search(query: String, audiusKey: String): List<MusicTrack> = coroutineScope {
         val jamendoId = prefs.getString("jamendo_client_id", "").orEmpty()
-        val archive = async { runCatching { searchArchive(query) }.getOrDefault(emptyList()) }
+        val archive = async { runCatching { searchArchive(query, videos = false) }.getOrDefault(emptyList()) }
         val jamendo = async {
             if (jamendoId.isBlank()) emptyList()
             else runCatching { searchJamendo(query, jamendoId) }.getOrDefault(emptyList())
@@ -22,6 +22,9 @@ class OnlineMusicRepository(context: Context) {
         }
         (jamendo.await() + audius.await() + archive.await()).distinctBy { it.provider + ":" + it.id }.take(60)
     }
+
+    suspend fun searchVideos(query: String): List<MusicTrack> =
+        runCatching { searchArchive(query, videos = true) }.getOrDefault(emptyList())
 
     fun saveJamendoClientId(value: String) {
         prefs.edit().putString("jamendo_client_id", value.trim()).apply()
@@ -36,12 +39,20 @@ class OnlineMusicRepository(context: Context) {
         val candidates = (0 until files.length()).mapNotNull { files.optJSONObject(it) }
             .filter { file ->
                 val name = file.optString("name").lowercase()
-                (name.endsWith(".mp3") || name.endsWith(".m4a") || name.endsWith(".ogg") ||
-                    name.endsWith(".flac") || name.endsWith(".opus")) && !name.contains("_thumb")
+                val supported = if (track.isVideo) {
+                    name.endsWith(".mp4") || name.endsWith(".m4v") || name.endsWith(".webm")
+                } else {
+                    name.endsWith(".mp3") || name.endsWith(".m4a") || name.endsWith(".ogg") ||
+                        name.endsWith(".flac") || name.endsWith(".opus")
+                }
+                supported && !name.contains("_thumb")
             }
             .sortedByDescending { file ->
                 val name = file.optString("name").lowercase()
                 when {
+                    name.endsWith(".mp4") -> 5
+                    name.endsWith(".m4v") -> 4
+                    name.endsWith(".webm") -> 3
                     name.endsWith(".mp3") -> 5
                     name.endsWith(".m4a") -> 4
                     name.endsWith(".ogg") || name.endsWith(".opus") -> 3
@@ -102,8 +113,9 @@ class OnlineMusicRepository(context: Context) {
         }
     }
 
-    private suspend fun searchArchive(query: String): List<MusicTrack> {
-        val url = "https://archive.org/advancedsearch.php?q=" + encode(query.trim() + " AND mediatype:audio") +
+    private suspend fun searchArchive(query: String, videos: Boolean): List<MusicTrack> {
+        val mediaFilter = if (videos) "movies" else "audio"
+        val url = "https://archive.org/advancedsearch.php?q=" + encode(query.trim() + " AND mediatype:" + mediaFilter) +
             "&fl[]=identifier&fl[]=title&fl[]=creator&fl[]=licenseurl&fl[]=year&rows=30&page=1&output=json"
         val docs = NetworkJson.get(url).optJSONObject("response")?.optJSONArray("docs") ?: return emptyList()
         return (0 until docs.length()).mapNotNull { index ->
@@ -124,7 +136,8 @@ class OnlineMusicRepository(context: Context) {
                 artworkUrl = "https://archive.org/services/img/" + Uri.encode(identifier),
                 provider = "Archive.org",
                 licenseLabel = license,
-                downloadAllowed = true
+                downloadAllowed = true,
+                isVideo = videos
             )
         }
     }
