@@ -31,7 +31,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -493,6 +496,9 @@ private fun ExploreScreen(
     }
 }
 
+private fun linesHaveWordSync(document: LyricsDocument): Boolean =
+    document.lines.any { it.words.isNotEmpty() }
+
 @Composable
 private fun LyricsScreen(
     track: MusicTrack?,
@@ -533,19 +539,46 @@ private fun LyricsScreen(
             }
         }
         lyrics?.let { document ->
-            Text("Source: " + document.source + if (document.wordSynced) " · word-sync available" else " · line-sync", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
+            Text("Source: " + document.source + if (linesHaveWordSync(document)) " · word-by-word sync" else " · line-sync", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
             val lines = document.lines
             if (lines.isNotEmpty()) {
                 val active = lines.indexOfLast { it.startMs <= position }
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(lines) { line ->
                         val index = lines.indexOf(line)
-                        Text(
-                            line.text.ifBlank { "♪" },
-                            style = if (index == active) MaterialTheme.typography.titleLarge else MaterialTheme.typography.bodyLarge,
-                            fontWeight = if (index == active) FontWeight.Bold else FontWeight.Normal,
-                            color = if (index == active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        val wordText = remember(line, position) {
+                            buildAnnotatedString {
+                                line.words.forEachIndexed { wordIndex, word ->
+                                    val wordEnd = word.endMs
+                                        ?: line.words.getOrNull(wordIndex + 1)?.startMs
+                                        ?: line.endMs
+                                        ?: lines.getOrNull(index + 1)?.startMs
+                                        ?: (word.startMs + 900L)
+                                    val activeWord = position >= word.startMs && position < wordEnd
+                                    withStyle(
+                                        SpanStyle(
+                                            color = if (activeWord) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontWeight = if (activeWord) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    ) {
+                                        append(word.text)
+                                    }
+                                }
+                            }
+                        }
+                        if (line.words.isNotEmpty()) {
+                            Text(
+                                wordText,
+                                style = if (index == active) MaterialTheme.typography.titleLarge else MaterialTheme.typography.bodyLarge
+                            )
+                        } else {
+                            Text(
+                                line.text.ifBlank { "♪" },
+                                style = if (index == active) MaterialTheme.typography.titleLarge else MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (index == active) FontWeight.Bold else FontWeight.Normal,
+                                color = if (index == active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             } else {
