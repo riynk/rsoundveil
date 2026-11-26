@@ -248,7 +248,8 @@ private fun RSoundveilApp() {
                             val granted = ContextCompat.checkSelfPermission(context, audioPermission) == PackageManager.PERMISSION_GRANTED
                             if (granted) localTracks = scanAudio(context) else permissionLauncher.launch(audioPermission)
                         },
-                        onPlayer = { destination = Destination.PLAYER }
+                        onPlayer = { destination = Destination.PLAYER },
+                        onLyrics = { destination = Destination.LYRICS }
                     )
                     Destination.PLAYER -> currentTrack?.let { track ->
                         NowPlayingScreen(
@@ -273,9 +274,13 @@ private fun RSoundveilApp() {
                             },
                             onLyrics = { destination = Destination.LYRICS }
                         )
-                    } ?: HomeScreen(currentTrack, { destination = Destination.EXPLORE }, {
-                        destination = Destination.LIBRARY
-                    }, { destination = Destination.LYRICS })
+                    } ?: HomeScreen(
+                        currentTrack,
+                        { destination = Destination.EXPLORE },
+                        { destination = Destination.LIBRARY },
+                        { destination = Destination.PLAYER },
+                        { destination = Destination.LYRICS }
+                    )
                     Destination.EXPLORE -> ExploreScreen(
                         query = query,
                         onQuery = { query = it },
@@ -409,7 +414,13 @@ private fun startTrack(
 }
 
 @Composable
-private fun HomeScreen(track: MusicTrack?, onExplore: () -> Unit, onLibrary: () -> Unit, onPlayer: () -> Unit) {
+private fun HomeScreen(
+    track: MusicTrack?,
+    onExplore: () -> Unit,
+    onLibrary: () -> Unit,
+    onPlayer: () -> Unit,
+    onLyrics: () -> Unit
+) {
     LazyColumn(contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
             Surface(shape = RoundedCornerShape(26.dp), color = Color(0xFF28223D), modifier = Modifier.fillMaxWidth()) {
