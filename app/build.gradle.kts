@@ -35,6 +35,7 @@ dependencies {
     implementation("androidx.media3:media3-session:1.6.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("io.coil-kt.coil3:coil-compose:3.2.0")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
