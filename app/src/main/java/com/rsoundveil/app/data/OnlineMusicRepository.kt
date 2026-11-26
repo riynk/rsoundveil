@@ -17,8 +17,7 @@ class OnlineMusicRepository(context: Context) {
             else runCatching { searchJamendo(query, jamendoId) }.getOrDefault(emptyList())
         }
         val audius = async {
-            if (audiusKey.isBlank()) emptyList()
-            else runCatching { searchAudius(query, audiusKey) }.getOrDefault(emptyList())
+            runCatching { searchAudius(query, audiusKey) }.getOrDefault(emptyList())
         }
         (jamendo.await() + audius.await() + archive.await()).distinctBy { it.provider + ":" + it.id }.take(60)
     }
@@ -60,7 +59,7 @@ class OnlineMusicRepository(context: Context) {
                     else -> 0
                 }
             }
-        val filename = candidates.firstOrNull()?.optString("name") ?: error("No supported audio file found")
+        val filename = candidates.firstOrNull()?.optString("name") ?: error(if (track.isVideo) "No supported video file found" else "No supported audio file found")
         val url = "https://archive.org/download/" + encode(track.id) + "/" + filename.split("/").joinToString("/") { Uri.encode(it) }
         return track.copy(streamUrl = url, downloadUrl = url, downloadAllowed = true)
     }
@@ -90,9 +89,10 @@ class OnlineMusicRepository(context: Context) {
     }
 
     private suspend fun searchAudius(query: String, apiKey: String): List<MusicTrack> {
+        val headers = if (apiKey.isBlank()) emptyMap() else mapOf("x-api-key" to apiKey)
         val root = NetworkJson.get(
             "https://api.audius.co/v1/tracks/search?query=" + encode(query) + "&limit=25",
-            mapOf("x-api-key" to apiKey)
+            headers
         )
         val data = root.optJSONArray("data") ?: return emptyList()
         return (0 until data.length()).mapNotNull { index ->
