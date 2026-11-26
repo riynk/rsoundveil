@@ -130,12 +130,24 @@ class MusicPlaybackService : MediaLibraryService() {
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = submit {
             val items = when (parentId) {
                 ROOT_ID -> listOf(
-                    folder(ALL_TRACKS_ID, "All music"),
-                    folder(RECENT_TRACKS_ID, "Recently added")
+                    folder(ALL_TRACKS_ID, "All songs"),
+                    folder(RECENT_TRACKS_ID, "Recently added"),
+                    folder(ALBUMS_ID, "Albums"),
+                    folder(ARTISTS_ID, "Artists")
                 )
                 ALL_TRACKS_ID -> queryLocalTracks(recentFirst = false)
                 RECENT_TRACKS_ID -> queryLocalTracks(recentFirst = true)
-                else -> emptyList()
+                ALBUMS_ID -> queryAlbums()
+                ARTISTS_ID -> queryArtists()
+                else -> when {
+                    parentId.startsWith(ALBUM_PREFIX) ->
+                        parentId.removePrefix(ALBUM_PREFIX).toLongOrNull()
+                            ?.let { queryLocalTracks(albumId = it) }.orEmpty()
+                    parentId.startsWith(ARTIST_PREFIX) ->
+                        parentId.removePrefix(ARTIST_PREFIX).toLongOrNull()
+                            ?.let { queryLocalTracks(artistId = it) }.orEmpty()
+                    else -> emptyList()
+                }
             }
             val size = pageSize.coerceIn(1, MAX_PAGE_SIZE)
             val start = (page.toLong().coerceAtLeast(0L) * size)
@@ -150,13 +162,19 @@ class MusicPlaybackService : MediaLibraryService() {
         ): ListenableFuture<LibraryResult<MediaItem>> = submit {
             val item = when (mediaId) {
                 ROOT_ID -> folder(ROOT_ID, "rsoundveil")
-                ALL_TRACKS_ID -> folder(ALL_TRACKS_ID, "All music")
+                ALL_TRACKS_ID -> folder(ALL_TRACKS_ID, "All songs")
                 RECENT_TRACKS_ID -> folder(RECENT_TRACKS_ID, "Recently added")
-                else -> {
-                    val localId = if (mediaId.startsWith(LOCAL_PREFIX)) {
+                ALBUMS_ID -> folder(ALBUMS_ID, "Albums")
+                ARTISTS_ID -> folder(ARTISTS_ID, "Artists")
+                else -> when {
+                    mediaId.startsWith(ALBUM_PREFIX) ->
+                        mediaId.removePrefix(ALBUM_PREFIX).toLongOrNull()?.let(::findAlbum)
+                    mediaId.startsWith(ARTIST_PREFIX) ->
+                        mediaId.removePrefix(ARTIST_PREFIX).toLongOrNull()?.let(::findArtist)
+                    mediaId.startsWith(LOCAL_PREFIX) ->
                         mediaId.removePrefix(LOCAL_PREFIX).toLongOrNull()
-                    } else null
-                    localId?.let { queryLocalTracks(id = it).firstOrNull() }
+                            ?.let { queryLocalTracks(id = it).firstOrNull() }
+                    else -> null
                 }
             }
             if (item != null) LibraryResult.ofItem(item, null)
@@ -170,8 +188,11 @@ class MusicPlaybackService : MediaLibraryService() {
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<Void>> = submit {
             val items = loadSearchResults(query)
-            searchResults[query.trim().lowercase()] = items
-            if (searchResults.size > MAX_CACHED_SEARCHES) searchResults.clear()
+            val cacheKey = query.trim().lowercase()
+            searchResults[cacheKey] = items
+            if (searchResults.size > MAX_CACHED_SEARCHES) {
+                searchResults.keys.firstOrNull { it != cacheKey }?.let(searchResults::remove)
+            }
             mainHandler.post {
                 session.notifySearchResultChanged(browser, query, items.size, params)
             }
@@ -253,17 +274,12 @@ class MusicPlaybackService : MediaLibraryService() {
         private fun queryLocalTracks(
             search: String? = null,
             id: Long? = null,
-            recentFirst: Boolean = false
+            recentFirst: Boolean = false,
+            albumId: Long? = null,
+            artistId: Long? = null
         ): List<MediaItem> {
             val hasAudioPermission =
-                ContextCompat.checkSelfPermission(
-                    this@MusicPlaybackService,
-                    android.Manifest.permission.READ_MEDIA_AUDIO
-                ) == PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(
-                    this@MusicPlaybackService,
-                    android.Manifest.permission.READ_EXTERNAL_STORAGE
-                ) == PackageManager.PERMISSION_GRANTED
+                hasAudioPermission()
             if (!hasAudioPermission) return emptyList()
 
             val columns = arrayOf(
@@ -279,6 +295,14 @@ class MusicPlaybackService : MediaLibraryService() {
             if (id != null) {
                 clauses += MediaStore.Audio.Media._ID + " = ?"
                 selectionArgs += id.toString()
+            }
+            if (albumId != null) {
+                clauses += MediaStore.Audio.Media.ALBUM_ID + " = ?"
+                selectionArgs += albumId.toString()
+            }
+            if (artistId != null) {
+                clauses += MediaStore.Audio.Media.ARTIST_ID + " = ?"
+                selectionArgs += artistId.toString()
             }
             if (!search.isNullOrBlank()) {
                 clauses += "(" +
@@ -336,6 +360,99 @@ class MusicPlaybackService : MediaLibraryService() {
             return result
         }
 
+        private fun queryAlbums(): List<MediaItem> {
+            if (!hasAudioPermission()) return emptyList()
+            val columns = arrayOf(
+                MediaStore.Audio.Albums._ID,
+                MediaStore.Audio.Albums.ALBUM,
+                MediaStore.Audio.Albums.ARTIST,
+                MediaStore.Audio.Albums.NUMBER_OF_SONGS,
+                MediaStore.Audio.Albums.FIRST_YEAR
+            )
+            val items = ArrayList<MediaItem>()
+            contentResolver.query(
+                MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
+                columns,
+                MediaStore.Audio.Albums.NUMBER_OF_SONGS + " > 0",
+                null,
+                MediaStore.Audio.Albums.ALBUM + " COLLATE NOCASE ASC"
+            )?.use { cursor ->
+                while (cursor.moveToNext() && items.size < MAX_LOCAL_RESULTS) {
+                    val id = cursor.longValue(MediaStore.Audio.Albums._ID)
+                    val title = cursor.stringValue(MediaStore.Audio.Albums.ALBUM)
+                    val artist = cursor.stringValue(MediaStore.Audio.Albums.ARTIST)
+                    val count = cursor.longValue(MediaStore.Audio.Albums.NUMBER_OF_SONGS)
+                    val year = cursor.longValue(MediaStore.Audio.Albums.FIRST_YEAR)
+                    val artwork = Uri.parse("content://media/external/audio/albumart/" + id)
+                    val metadata = MediaMetadata.Builder()
+                        .setTitle(title.ifBlank { "Unknown album" })
+                        .setArtist(artist.ifBlank { "Unknown artist" })
+                        .setSubtitle(count.toString() + " tracks" + if (year > 0) " · " + year else "")
+                        .setArtworkUri(artwork)
+                        .setIsBrowsable(true)
+                        .setIsPlayable(false)
+                        .build()
+                    items += MediaItem.Builder()
+                        .setMediaId(ALBUM_PREFIX + id)
+                        .setMediaMetadata(metadata)
+                        .build()
+                }
+            }
+            return items
+        }
+
+        private fun queryArtists(): List<MediaItem> {
+            if (!hasAudioPermission()) return emptyList()
+            val columns = arrayOf(
+                MediaStore.Audio.Artists._ID,
+                MediaStore.Audio.Artists.ARTIST,
+                MediaStore.Audio.Artists.NUMBER_OF_TRACKS,
+                MediaStore.Audio.Artists.NUMBER_OF_ALBUMS
+            )
+            val items = ArrayList<MediaItem>()
+            contentResolver.query(
+                MediaStore.Audio.Artists.EXTERNAL_CONTENT_URI,
+                columns,
+                MediaStore.Audio.Artists.NUMBER_OF_TRACKS + " > 0",
+                null,
+                MediaStore.Audio.Artists.ARTIST + " COLLATE NOCASE ASC"
+            )?.use { cursor ->
+                while (cursor.moveToNext() && items.size < MAX_LOCAL_RESULTS) {
+                    val id = cursor.longValue(MediaStore.Audio.Artists._ID)
+                    val artist = cursor.stringValue(MediaStore.Audio.Artists.ARTIST)
+                    val tracks = cursor.longValue(MediaStore.Audio.Artists.NUMBER_OF_TRACKS)
+                    val albums = cursor.longValue(MediaStore.Audio.Artists.NUMBER_OF_ALBUMS)
+                    val metadata = MediaMetadata.Builder()
+                        .setTitle(artist.ifBlank { "Unknown artist" })
+                        .setSubtitle(albums.toString() + " albums · " + tracks + " tracks")
+                        .setIsBrowsable(true)
+                        .setIsPlayable(false)
+                        .build()
+                    items += MediaItem.Builder()
+                        .setMediaId(ARTIST_PREFIX + id)
+                        .setMediaMetadata(metadata)
+                        .build()
+                }
+            }
+            return items
+        }
+
+        private fun findAlbum(id: Long): MediaItem? =
+            queryAlbums().firstOrNull { it.mediaId == ALBUM_PREFIX + id }
+
+        private fun findArtist(id: Long): MediaItem? =
+            queryArtists().firstOrNull { it.mediaId == ARTIST_PREFIX + id }
+
+        private fun hasAudioPermission(): Boolean =
+            ContextCompat.checkSelfPermission(
+                this@MusicPlaybackService,
+                android.Manifest.permission.READ_MEDIA_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                this@MusicPlaybackService,
+                android.Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+
         private fun onlineMediaId(track: MusicTrack): String =
             ONLINE_PREFIX + track.provider + ":" + track.id
 
@@ -382,6 +499,10 @@ class MusicPlaybackService : MediaLibraryService() {
         private const val ROOT_ID = "rsoundveil_root"
         private const val ALL_TRACKS_ID = "local_all_tracks"
         private const val RECENT_TRACKS_ID = "local_recent_tracks"
+        private const val ALBUMS_ID = "local_albums"
+        private const val ARTISTS_ID = "local_artists"
+        private const val ALBUM_PREFIX = "album:"
+        private const val ARTIST_PREFIX = "artist:"
         private const val LOCAL_PREFIX = "local:"
         private const val ONLINE_PREFIX = "online:"
         private const val MAX_PAGE_SIZE = 100
