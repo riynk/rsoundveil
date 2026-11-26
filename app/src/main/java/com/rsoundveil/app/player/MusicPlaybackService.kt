@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
@@ -99,6 +101,7 @@ class MusicPlaybackService : MediaLibraryService() {
         private val executor: ExecutorService = Executors.newFixedThreadPool(2) { runnable ->
             Thread(runnable, "rsoundveil-media-library").apply { isDaemon = true }
         }
+        private val mainHandler = Handler(Looper.getMainLooper())
         private val onlineRepository = OnlineMusicRepository(this@MusicPlaybackService)
         private val onlineTracks = ConcurrentHashMap<String, MusicTrack>()
         private val searchResults = ConcurrentHashMap<String, List<MediaItem>>()
@@ -169,7 +172,9 @@ class MusicPlaybackService : MediaLibraryService() {
             val items = loadSearchResults(query)
             searchResults[query.trim().lowercase()] = items
             if (searchResults.size > MAX_CACHED_SEARCHES) searchResults.clear()
-            session.notifySearchResultChanged(browser, query, items.size, params)
+            mainHandler.post {
+                session.notifySearchResultChanged(browser, query, items.size, params)
+            }
             LibraryResult.ofVoid(params)
         }
 
