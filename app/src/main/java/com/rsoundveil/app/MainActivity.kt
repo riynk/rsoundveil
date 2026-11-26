@@ -3,10 +3,12 @@ package com.rsoundveil.app
 import android.Manifest
 import android.content.ComponentName
 import android.content.Context
+import android.app.DownloadManager
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -85,6 +87,7 @@ private fun RSoundveilApp() {
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var message by remember { mutableStateOf<String?>(null) }
+    var pendingDownload by remember { mutableStateOf<MusicTrack?>(null) }
     val scope = rememberCoroutineScope()
 
     DisposableEffect(controllerFuture) {
@@ -119,6 +122,46 @@ private fun RSoundveilApp() {
     val audioPermission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) localTracks = scanAudio(context) else message = "Permission is needed to read your device music."
+    }
+
+    val writePermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val pending = pendingDownload
+        pendingDownload = null
+        if (granted && pending != null) {
+            runCatching { enqueueAuthorizedDownload(context, pending) }
+                .onSuccess { message = "Download added to Music/rsoundveil." }
+                .onFailure { message = "Download could not be started: " + it.message }
+        } else if (pending != null) {
+            message = "Storage permission was denied; no file was downloaded."
+        }
+    }
+
+    val onDownloadTrack: (MusicTrack) -> Unit = { track ->
+        scope.launch {
+            val prepared = runCatching { music.resolvePlayback(track) }.getOrElse {
+                message = "Download preparation failed: " + it.message
+                null
+            }
+            if (prepared != null) {
+                val downloadUrl = prepared.downloadUrl
+                    ?: if (prepared.provider == "Archive.org") prepared.streamUrl else null
+                if (!prepared.downloadAllowed || downloadUrl.isNullOrBlank()) {
+                    message = "This provider does not permit downloading this track."
+                } else {
+                    val downloadable = prepared.copy(downloadUrl = downloadUrl)
+                    if (Build.VERSION.SDK_INT < 29 &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        pendingDownload = downloadable
+                        writePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    } else {
+                        runCatching { enqueueAuthorizedDownload(context, downloadable) }
+                            .onSuccess { message = "Download added to Music/rsoundveil." }
+                            .onFailure { message = "Download could not be started: " + it.message }
+                    }
+                }
+            }
+        }
     }
 
     MaterialTheme(
@@ -238,6 +281,7 @@ private fun RSoundveilApp() {
                         onQuery = { query = it },
                         tracks = results,
                         loading = loading,
+                        onDownload = onDownloadTrack,
                         onSearch = {
                             if (query.isNotBlank()) scope.launch {
                                 loading = true
@@ -400,6 +444,7 @@ private fun ExploreScreen(
     onQuery: (String) -> Unit,
     tracks: List<MusicTrack>,
     loading: Boolean,
+    onDownload: (MusicTrack) -> Unit,
     onSearch: () -> Unit,
     onPlay: (MusicTrack) -> Unit
 ) {
@@ -425,7 +470,12 @@ private fun ExploreScreen(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             items(tracks, key = { it.provider + it.id }) { track ->
                 TrackRow(track, onClick = { onPlay(track) }, trailing = {
-                    IconButton(onClick = { onPlay(track) }) { Icon(Icons.Default.PlayArrow, "Play") }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { onPlay(track) }) { Icon(Icons.Default.PlayArrow, "Play") }
+                        if (track.downloadAllowed) {
+                            IconButton(onClick = { onDownload(track) }) { Icon(Icons.Default.Download, "Download to Music/rsoundveil") }
+                        }
+                    }
                 })
             }
         }
@@ -691,6 +741,35 @@ private fun ActionCard(
             Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+
+private fun enqueueAuthorizedDownload(context: Context, track: MusicTrack): Long {
+    require(track.downloadAllowed) { "The provider has not authorized this download." }
+    val source = track.downloadUrl ?: error("The provider did not supply a download URL.")
+    val uri = Uri.parse(source)
+    val extension = uri.lastPathSegment
+        ?.substringAfterLast('.', "mp3")
+        ?.lowercase()
+        ?.takeIf { it.matches(Regex("[a-z0-9]{2,5}")) }
+        ?: "mp3"
+    val safeBase = (track.title + "_" + track.id)
+        .replace(Regex("[^A-Za-z0-9._-]+"), "_")
+        .trim('_')
+        .take(90)
+        .ifBlank { "rsoundveil_track" }
+    val request = DownloadManager.Request(uri)
+        .setTitle(track.title)
+        .setDescription("Downloading from " + track.provider)
+        .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        .setAllowedOverMetered(true)
+        .setAllowedOverRoaming(false)
+        .setDestinationInExternalPublicDir(
+            Environment.DIRECTORY_MUSIC,
+            "rsoundveil/" + safeBase + "." + extension
+        )
+    val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+    return manager.enqueue(request)
 }
 
 private fun scanAudio(context: Context): List<MusicTrack> {
