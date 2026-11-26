@@ -262,18 +262,7 @@ private fun RSoundveilApp() {
                             duration = duration,
                             onPlayPause = { if (playing) controller?.pause() else controller?.play() },
                             onOpen = { destination = Destination.PLAYER },
-                            onLyrics = { destination = Destination.LYRICS },
-                            onDetails = {
-                                destination = Destination.DETAILS
-                                val track = currentTrack
-                                if (track != null) scope.launch {
-                                    detailsLoading = true
-                                    runCatching { musicInfoRepository.getDetails(track) }
-                                        .onSuccess { artistInfo = it.artist; albumInfo = it.album }
-                                        .onFailure { message = "Artist/album lookup failed: " + it.message }
-                                    detailsLoading = false
-                                }
-                            }
+                            onLyrics = { destination = Destination.LYRICS }
                         )
                     }
                     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
@@ -345,7 +334,18 @@ private fun RSoundveilApp() {
                                 }
                                 controller?.repeatMode = next
                             },
-                            onLyrics = { destination = Destination.LYRICS }
+                            onLyrics = { destination = Destination.LYRICS },
+                            onDetails = {
+                                destination = Destination.DETAILS
+                                val selected = currentTrack
+                                if (selected != null) scope.launch {
+                                    detailsLoading = true
+                                    runCatching { musicInfoRepository.getDetails(selected) }
+                                        .onSuccess { artistInfo = it.artist; albumInfo = it.album }
+                                        .onFailure { message = "Artist/album lookup failed: " + it.message }
+                                    detailsLoading = false
+                                }
+                            }
                         )
                     } ?: HomeScreen(
                         currentTrack,
