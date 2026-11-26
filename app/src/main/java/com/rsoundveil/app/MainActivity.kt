@@ -46,15 +46,19 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import coil3.compose.AsyncImage
+import com.rsoundveil.app.data.AlbumInfo
+import com.rsoundveil.app.data.ArtistInfo
 import com.rsoundveil.app.data.LyricsDocument
 import com.rsoundveil.app.data.LyricsRepository
+import com.rsoundveil.app.data.MusicDetails
+import com.rsoundveil.app.data.MusicInfoRepository
 import com.rsoundveil.app.data.MusicTrack
 import com.rsoundveil.app.data.OnlineMusicRepository
 import com.rsoundveil.app.player.MusicPlaybackService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class Destination { HOME, EXPLORE, PLAYER, LYRICS, LIBRARY, SETTINGS }
+private enum class Destination { HOME, EXPLORE, PLAYER, DETAILS, LYRICS, LIBRARY, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,6 +74,7 @@ private fun RSoundveilApp() {
     val prefs = remember { context.getSharedPreferences("rsoundveil.settings", Context.MODE_PRIVATE) }
     val music = remember { OnlineMusicRepository(context) }
     val lyricService = remember { LyricsRepository(context) }
+    val musicInfoRepository = remember { MusicInfoRepository() }
     val sessionToken = remember { SessionToken(context, ComponentName(context, MusicPlaybackService::class.java)) }
     val controllerFuture = remember { MediaController.Builder(context, sessionToken).buildAsync() }
 
@@ -79,6 +84,9 @@ private fun RSoundveilApp() {
     var results by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
     var localTracks by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
     var currentTrack by remember { mutableStateOf<MusicTrack?>(null) }
+    var artistInfo by remember { mutableStateOf<ArtistInfo?>(null) }
+    var albumInfo by remember { mutableStateOf<AlbumInfo?>(null) }
+    var detailsLoading by remember { mutableStateOf(false) }
     var activeQueue by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
     var lyrics by remember { mutableStateOf<LyricsDocument?>(null) }
     var translation by remember { mutableStateOf<String?>(null) }
@@ -115,6 +123,8 @@ private fun RSoundveilApp() {
                     currentTrack = selected
                     lyrics = null
                     translation = null
+                    artistInfo = null
+                    albumInfo = null
                 }
                 position = 0L
                 duration = active.duration.takeIf { it > 0L && it != androidx.media3.common.C.TIME_UNSET } ?: 0L
@@ -216,7 +226,18 @@ private fun RSoundveilApp() {
                             duration = duration,
                             onPlayPause = { if (playing) controller?.pause() else controller?.play() },
                             onOpen = { destination = Destination.PLAYER },
-                            onLyrics = { destination = Destination.LYRICS }
+                            onLyrics = { destination = Destination.LYRICS },
+                            onDetails = {
+                                destination = Destination.DETAILS
+                                val track = currentTrack
+                                if (track != null) scope.launch {
+                                    detailsLoading = true
+                                    runCatching { musicInfoRepository.getDetails(track) }
+                                        .onSuccess { artistInfo = it.artist; albumInfo = it.album }
+                                        .onFailure { message = "Artist/album lookup failed: " + it.message }
+                                    detailsLoading = false
+                                }
+                            }
                         )
                     }
                     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
@@ -312,6 +333,22 @@ private fun RSoundveilApp() {
                             }
                         },
                         onPlay = { startTrack(it, results, music, controller, { currentTrack = it }, { activeQueue = it }, { message = it }, scope) }
+                    )
+                    Destination.DETAILS -> DetailsScreen(
+                        track = currentTrack,
+                        artist = artistInfo,
+                        album = albumInfo,
+                        loading = detailsLoading,
+                        onReload = {
+                            val track = currentTrack
+                            if (track != null) scope.launch {
+                                detailsLoading = true
+                                runCatching { musicInfoRepository.getDetails(track) }
+                                    .onSuccess { artistInfo = it.artist; albumInfo = it.album }
+                                    .onFailure { message = "Artist/album lookup failed: " + it.message }
+                                detailsLoading = false
+                            }
+                        }
                     )
                     Destination.LYRICS -> LyricsScreen(
                         track = currentTrack,
@@ -513,6 +550,78 @@ private fun ExploreScreen(
 }
 
 @Composable
+private fun DetailsScreen(
+    track: MusicTrack?,
+    artist: ArtistInfo?,
+    album: AlbumInfo?,
+    loading: Boolean,
+    onReload: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Text("Artist & album", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            track?.let {
+                Text(it.title + " · " + it.artist, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            OutlinedButton(onClick = onReload, enabled = !loading) {
+                if (loading) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                else Icon(Icons.Default.Refresh, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Refresh metadata")
+            }
+        }
+        item {
+            Text("Artist profile", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            if (artist == null) {
+                Text("No matching MusicBrainz artist record loaded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text(artist.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                val facts = listOfNotNull(
+                    artist.type,
+                    artist.country,
+                    listOfNotNull(artist.beginDate, artist.endDate).joinToString(" – ").takeIf { it.isNotBlank() },
+                    artist.disambiguation
+                )
+                facts.forEach { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (artist.genres.isNotEmpty()) {
+                    Text("Tags: " + artist.genres.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                }
+                Text("MusicBrainz ID: " + artist.id, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        item {
+            HorizontalDivider()
+            Text("Release information", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            if (album == null) {
+                Text("No matching MusicBrainz release record loaded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                AsyncImage(
+                    model = album.coverArtUrl,
+                    contentDescription = "Release artwork",
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp).clip(RoundedCornerShape(18.dp))
+                )
+                Text(album.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                listOfNotNull(
+                    album.artistCredit,
+                    album.date,
+                    album.country,
+                    album.status,
+                    album.trackCount.takeIf { it > 0 }?.let { "$it tracks" }
+                ).forEach { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Text("MusicBrainz release ID: " + album.id, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        item {
+            Text("Metadata source: MusicBrainz. Artwork: Cover Art Archive.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
 private fun LyricsScreen(
     track: MusicTrack?,
     lyrics: LyricsDocument?,
@@ -675,7 +784,8 @@ private fun NowPlayingScreen(
     onSeek: (Long) -> Unit,
     onShuffle: () -> Unit,
     onRepeat: () -> Unit,
-    onLyrics: () -> Unit
+    onLyrics: () -> Unit,
+    onDetails: () -> Unit
 ) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp),
@@ -720,6 +830,11 @@ private fun NowPlayingScreen(
                     tint = if (repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+        OutlinedButton(onClick = onDetails, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.Info, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Artist and album information")
         }
         OutlinedButton(onClick = onLyrics, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.Lyrics, null)
