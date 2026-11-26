@@ -15,16 +15,32 @@ data class MusicTrack(
     val localUri: String? = null
 )
 
-data class LyricLine(val startMs: Long, val text: String)
+data class LyricWord(
+    val startMs: Long,
+    val text: String,
+    val endMs: Long? = null
+)
+
+data class LyricLine(
+    val startMs: Long,
+    val text: String,
+    val endMs: Long? = null,
+    val words: List<LyricWord> = emptyList()
+)
 
 data class LyricsDocument(
     val trackId: String,
     val plainLyrics: String?,
     val syncedLyrics: String?,
     val source: String,
-    val wordSynced: Boolean = false
+    val wordSynced: Boolean = false,
+    val lyricsFile: String? = null
 ) {
-    val lines: List<LyricLine> get() = LrcParser.parse(syncedLyrics.orEmpty())
+    val lines: List<LyricLine>
+        get() {
+            val wordLines = lyricsFile?.let(LyricsFileParser::parse).orEmpty()
+            return wordLines.ifEmpty { LrcParser.parse(syncedLyrics.orEmpty()) }
+        }
 }
 
 object LrcParser {
