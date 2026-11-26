@@ -1,6 +1,7 @@
 package com.rsoundveil.app.player
 
 import android.app.PendingIntent
+import android.content.Intent
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
@@ -9,6 +10,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.rsoundveil.app.MainActivity
 
 @UnstableApi
 class MusicPlaybackService : MediaSessionService() {
@@ -33,11 +35,17 @@ class MusicPlaybackService : MediaSessionService() {
                 )
                 setHandleAudioBecomingNoisy(true)
             }
-        val launch = packageManager.getLaunchIntentForPackage(packageName)
-        val activity = launch?.let {
-            PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        }
-        mediaSession = MediaSession.Builder(this, player).setSessionActivity(activity).build()
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: Intent(this, MainActivity::class.java)
+        val sessionActivity = PendingIntent.getActivity(
+            this,
+            0,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        mediaSession = MediaSession.Builder(this, player)
+            .setSessionActivity(sessionActivity)
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
