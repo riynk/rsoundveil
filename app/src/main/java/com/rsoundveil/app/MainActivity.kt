@@ -148,6 +148,38 @@ private fun RSoundveilApp() {
         }
     }
 
+    // The active song automatically owns the lyric lookup and offline-cache lifecycle.
+    LaunchedEffect(currentTrack?.provider, currentTrack?.id) {
+        val selected = currentTrack
+        if (selected == null) {
+            lyrics = null
+            translation = null
+        } else {
+            val savedLyrics = lyricService.cached(selected)
+            lyrics = savedLyrics
+            translation = lyricService.cachedTranslation(selected, lyricSourceLanguage)
+            if (savedLyrics == null) {
+                loading = true
+                val lookup = runCatching { lyricService.find(selected) }
+                if (currentTrack?.provider == selected.provider && currentTrack?.id == selected.id) {
+                    lookup.onSuccess {
+                        lyrics = it
+                        translation = lyricService.cachedTranslation(selected, lyricSourceLanguage)
+                    }.onFailure {
+                        message = "Lyrics are not available for this track yet."
+                    }
+                }
+                loading = false
+            }
+        }
+    }
+
+    LaunchedEffect(lyricSourceLanguage, currentTrack?.provider, currentTrack?.id) {
+        val selected = currentTrack
+        translation = if (selected == null) null
+            else lyricService.cachedTranslation(selected, lyricSourceLanguage)
+    }
+
     val audioPermission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) localTracks = scanAudio(context) else message = "Permission is needed to read your device music."
