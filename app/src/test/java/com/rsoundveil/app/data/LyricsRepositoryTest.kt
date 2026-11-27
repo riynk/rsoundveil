@@ -17,7 +17,7 @@ class LyricsRepositoryTest {
         val parts = splitUtf8Segments(value, 450)
         assertTrue(parts.all { it.toByteArray(Charsets.UTF_8).size <= 450 })
         assertEquals(value, parts.joinToString(""))
-        assertTrue(parts.all { it.toCharArray().none(Character::isSurrogate) })
+        assertTrue(parts.all { part ->\n            var i = 0\n            while (i < part.length) {\n                val ch = part[i]\n                if (Character.isHighSurrogate(ch)) { if (i + 1 >= part.length || !Character.isLowSurrogate(part[i + 1])) return@all false; i += 2 }\n                else if (Character.isLowSurrogate(ch)) return@all false\n                else i++\n            }\n            true\n        })
     }
 
     @Test fun retainsWordBoundariesWhenPossible() {
