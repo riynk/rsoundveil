@@ -141,27 +141,41 @@ class LyricsRepository(context: Context) {
             ?: throw IllegalStateException("Translation provider returned no text")
     }
 
-    private fun splitUtf8Segments(value: String, maxBytes: Int): List<String> {
-        if (value.toByteArray(Charsets.UTF_8).size <= maxBytes) return listOf(value)
-        val result = mutableListOf<String>()
-        val current = StringBuilder()
-        for (word in value.split(Regex("\\s+"))) {
-            val candidate = if (current.isEmpty()) word else current.toString() + " " + word
-            if (candidate.toByteArray(Charsets.UTF_8).size > maxBytes && current.isNotEmpty()) {
-                result += current.toString()
-                current.setLength(0)
-                current.append(word)
-            } else {
-                if (current.isNotEmpty()) current.append(' ')
-                current.append(word)
-            }
-        }
-        if (current.isNotEmpty()) result += current.toString()
-        return result
-    }
-
     private fun pathSegment(value: String): String =
         URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
     private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
+}
+
+/** Splits arbitrary Unicode text without exceeding the provider byte limit or breaking surrogate pairs. */
+internal fun splitUtf8Segments(value: String, maxBytes: Int): List<String> {
+    require(maxBytes > 0)
+    if (value.isEmpty()) return emptyList()
+    val output = mutableListOf<String>()
+    var chunk = StringBuilder()
+    var bytes = 0
+    for (word in value.split(Regex("\\s+"))) {
+        if (word.isEmpty()) continue
+        val wordBytes = word.toByteArray(Charsets.UTF_8).size
+        if (wordBytes <= maxBytes && bytes + (if (chunk.isEmpty()) 0 else 1) + wordBytes <= maxBytes) {
+            if (chunk.isNotEmpty()) { chunk.append(' '); bytes++ }
+            chunk.append(word); bytes += wordBytes
+            continue
+        }
+        if (chunk.isNotEmpty()) { output += chunk.toString(); chunk = StringBuilder(); bytes = 0 }
+        var piece = StringBuilder()
+        var pieceBytes = 0
+        var index = 0
+        while (index < word.length) {
+            val cpLength = if (Character.isHighSurrogate(word[index]) && index + 1 < word.length && Character.isLowSurrogate(word[index + 1])) 2 else 1
+            val cp = word.substring(index, index + cpLength)
+            val cpBytes = cp.toByteArray(Charsets.UTF_8).size
+            require(cpBytes <= maxBytes) { "maxBytes too small for Unicode code point" }
+            if (pieceBytes + cpBytes > maxBytes) { output += piece.toString(); piece = StringBuilder(); pieceBytes = 0 }
+            piece.append(cp); pieceBytes += cpBytes; index += cpLength
+        }
+        if (piece.isNotEmpty()) { chunk.append(piece); bytes = pieceBytes }
+    }
+    if (chunk.isNotEmpty()) output += chunk.toString()
+    return output
 }
