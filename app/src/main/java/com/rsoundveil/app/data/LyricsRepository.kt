@@ -136,9 +136,17 @@ class LyricsRepository(context: Context) {
         val url = "https://api.mymemory.translated.net/get?q=" + enc(segment) +
             "&langpair=" + enc(sourceLanguage + "|id")
         val response = NetworkJson.get(url)
+        val status = response.optInt("responseStatus", 200)
+        if (status != 200) {
+            val detail = response.optString("responseDetails").takeIf { it.isNotBlank() }
+            throw IllegalStateException("Translation provider returned status " + status + detail?.let { ": " + it }.orEmpty())
+        }
         val data = response.optJSONObject("responseData") ?: JSONObject()
-        return data.optString("translatedText").takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("Translation provider returned no text")
+        val translated = data.optString("translatedText").trim()
+        if (translated.isBlank() || translated == "null") {
+            throw IllegalStateException("Translation provider returned no text")
+        }
+        return translated
     }
 
     private fun pathSegment(value: String): String =
